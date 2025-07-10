@@ -154,9 +154,9 @@ bool render_template(const char* template, const TemplateContext* ctx, OutputBuf
 #define VAR_ARRAY_STR(key, str_array) VAR_ARRAY(key, str_array, TMPL_STRING)
 
 #define MAKE_PTR_ARRAY(arr, ptrs, name)                                                                      \
-    typeof((arr)[0])*(name)[sizeof(arr) / sizeof((arr)[0])];                                                 \
+    ptrs name[sizeof(arr) / sizeof((arr)[0])];                                                               \
     for (size_t __i = 0; __i < sizeof(arr) / sizeof((arr)[0]); ++__i)                                        \
-        (name)[__i] = &(arr)[__i];
+    name[__i] = &(arr)[__i]
 
 #ifdef __cplusplus
 }

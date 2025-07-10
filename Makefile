@@ -29,7 +29,7 @@ endif
 
 # Compiler and flags
 CC = clang
-CFLAGS = -Wall -Wextra -O2 -std=c23 -D_GNU_SOURCE
+CFLAGS = -Wall -Wextra -O2 -std=c99 -D_GNU_SOURCE
 LDFLAGS = -L. -lbreeze
 
 # Source files

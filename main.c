@@ -3,7 +3,7 @@
 int main() {
     const char* fruits[] = {"Apple", "Banana", "Cherry"};
     int numbers_data[] = {1, 2, 3, 4, 5};
-    MAKE_PTR_ARRAY(numbers_data, number_ptrs, number_ptrs);
+    MAKE_PTR_ARRAY(numbers_data, int*, number_ptrs);
 
     TemplateVar vars[] = {
         VAR_STRING("user", "Dr. Nathan"), VAR_BOOL("is_admin", true),
