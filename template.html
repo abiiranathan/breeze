@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>User Profile</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        .admin {
+            color: #d9534f;
+            font-weight: bold;
+        }
+
+        .fruits {
+            margin-left: 20px;
+        }
+    </style>
+</head>
+<!-- {{ unknown_variable }} -->
+
+<body>
+    <h1>Hello {{ user }}!</h1>
+    {% if is_admin %}
+    <p class="admin">You are an administrator with ID: {{ user_id }}</p>
+    {% else %}
+    <p>You are a regular user.</p>
+    {% endif %}
+
+    {% if is_guest %}
+    <p>Welcome, guest!</p>
+    {% else %}
+    <p>Welcome back!</p>
+    {% endif %}
+
+    <h2>Score: {{ score }}</h2>
+    {% if score %}
+    <p>You have a score!</p>
+    {% endif %}
+
+    <h2>Fruits:</h2>
+    <ul class="fruits">
+        {% for fruit in fruits %}
+        <li>{{ fruit }}{% if fruit %} (available){% endif %}</li>
+        {% endfor %}
+    </ul>
+
+    <h2>Numbers:</h2>
+    <ul>
+        {% for num in numbers %}
+        <li>{{ num }}</li>
+        {% endfor %}
+    </ul>
+</body>
+
+</html>
