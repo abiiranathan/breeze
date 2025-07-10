@@ -1,0 +1,7 @@
+a.out
+breeze
+*.so
+*.o
+*.a
+*.dylib
+*.dll
