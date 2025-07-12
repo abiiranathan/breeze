@@ -24,6 +24,10 @@ typedef struct {
     size_t capacity;
 } LoopStack;
 
+WARN_UNUSED static bool evaluate_condition(const char* condition, const TemplateContext* ctx,
+                                           const LoopStack* loop_stack, TemplateError* err,
+                                           const char* template_start, const char* error_pos);
+
 /**
  * @brief Initialize a loop stack
  * @param stack Pointer to the stack to initialize
@@ -343,6 +347,330 @@ static inline bool is_truthy(const TemplateValue* val) {
     }
 }
 
+// ============= Expression evaluation stack =======================
+/*
+Tokenization: The input expression is split into tokens (variables, operators, parentheses)
+
+Shunting-Yard Algorithm: Converts infix notation to postfix (Reverse Polish Notation)
+
+Handles operator precedence (NOT > AND > OR)
+
+Manages parentheses for nested expressions
+
+Postfix Evaluation: Evaluates the postfix expression using a stack
+
+Values are pushed onto the stack
+
+Operators pop their operands and push results
+*/
+
+/**
+ * @brief Initialize an expression stack
+ */
+WARN_UNUSED static bool expr_stack_init(ExprStack* stack, size_t capacity) {
+    stack->tokens = malloc(sizeof(ExprToken) * capacity);
+    if (!stack->tokens) {
+        perror("malloc");
+        return false;
+    }
+    stack->size = 0;
+    stack->capacity = capacity;
+    return true;
+}
+
+/**
+ * @brief Custom tokenizer that handles parentheses without requiring spaces
+ * @param str Input string (first call) or NULL (subsequent calls)
+ * @param saveptr Pointer to save position for next call
+ * @param token_buf Buffer to store the extracted token
+ * @param buf_size Size of the token buffer
+ * @return Pointer to token_buf if token found, NULL if no more tokens
+ */
+static char* next_token(char* str, char** saveptr, char* token_buf, size_t buf_size) {
+    if (!str && !*saveptr)
+        return NULL;
+
+    char* start = str ? str : *saveptr;
+    if (!*start)
+        return NULL;
+
+    // Skip leading whitespace
+    while (isspace(*start))
+        start++;
+    if (!*start)
+        return NULL;
+
+    // Handle operators and parentheses as separate tokens
+    if (*start == '(' || *start == ')') {
+        if (buf_size >= 2) {
+            token_buf[0] = *start;
+            token_buf[1] = '\0';
+            *saveptr = start + 1;
+            return token_buf;
+        }
+        return NULL;
+    }
+
+    // Find end of token (space or parenthesis)
+    char* end = start;
+    while (*end && !isspace(*end) && *end != '(' && *end != ')')
+        end++;
+
+    // Calculate token length
+    size_t token_len = end - start;
+    if (token_len >= buf_size) {
+        // Token too long for buffer
+        return NULL;
+    }
+
+    // Copy token to buffer
+    memcpy(token_buf, start, token_len);
+    token_buf[token_len] = '\0';
+
+    // Update saveptr
+    *saveptr = end;
+
+    return token_buf;
+}
+
+/**
+ * @brief Push a token onto the expression stack
+ */
+WARN_UNUSED static bool expr_stack_push(ExprStack* stack, ExprToken token) {
+    if (stack->size >= stack->capacity) {
+        stack->capacity *= 2;
+        stack->tokens = realloc(stack->tokens, sizeof(ExprToken) * stack->capacity);
+        if (!stack->tokens) {
+            perror("realloc");
+            return false;
+        }
+    }
+    stack->tokens[stack->size++] = token;
+    return true;
+}
+
+/**
+ * @brief Pop a token from the expression stack
+ */
+static ExprToken expr_stack_pop(ExprStack* stack) {
+    return stack->size > 0 ? stack->tokens[--stack->size] : (ExprToken){0};
+}
+
+/**
+ * @brief Peek at the top token without popping
+ */
+static ExprToken expr_stack_peek(ExprStack* stack) {
+    return stack->size > 0 ? stack->tokens[stack->size - 1] : (ExprToken){0};
+}
+
+/**
+ * @brief Free expression stack memory
+ */
+static void expr_stack_free(ExprStack* stack) {
+    free(stack->tokens);
+}
+
+/* ==================== Shunting-Yard Algorithm Implementation ==================== */
+
+/**
+ * @brief Operator precedence levels
+ */
+static int op_precedence(ExprTokenType op) {
+    switch (op) {
+        case TOKEN_NOT:
+            return 3;
+        case TOKEN_AND:
+            return 2;
+        case TOKEN_OR:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/**
+ * @brief Convert infix expression to postfix notation with improved tokenization
+ */
+WARN_UNUSED static bool infix_to_postfix(const char* expr, const TemplateContext* ctx,
+                                         const LoopStack* loop_stack, ExprStack* output, TemplateError* err,
+                                         const char* template_start, const char* error_pos) {
+    ExprStack op_stack = {0};
+    char* expr_copy = NULL;
+    char* saveptr = NULL;
+    char token_buf[128];
+    bool success = false;
+
+    if (!expr_stack_init(&op_stack, 16)) {
+        goto malloc_fail;
+    }
+
+    expr_copy = strdup(expr);
+    if (!expr_copy) {
+        goto malloc_fail;
+    }
+
+    char* token = next_token(expr_copy, &saveptr, token_buf, sizeof(token_buf));
+    while (token) {
+        if (strcmp(token, "and") == 0) {
+            // Handle AND operator
+            while (op_stack.size > 0 &&
+                   op_precedence(expr_stack_peek(&op_stack).type) >= op_precedence(TOKEN_AND)) {
+                if (!expr_stack_push(output, expr_stack_pop(&op_stack))) {
+                    goto malloc_fail;
+                }
+            }
+            if (!expr_stack_push(&op_stack, (ExprToken){.type = TOKEN_AND})) {
+                goto malloc_fail;
+            }
+        } else if (strcmp(token, "or") == 0) {
+            // Handle OR operator
+            while (op_stack.size > 0 &&
+                   op_precedence(expr_stack_peek(&op_stack).type) >= op_precedence(TOKEN_OR)) {
+                if (!expr_stack_push(output, expr_stack_pop(&op_stack))) {
+                    goto malloc_fail;
+                }
+            }
+            if (!expr_stack_push(&op_stack, (ExprToken){.type = TOKEN_OR})) {
+                goto malloc_fail;
+            }
+        } else if (strcmp(token, "not") == 0) {
+            // Handle NOT operator
+            if (!expr_stack_push(&op_stack, (ExprToken){.type = TOKEN_NOT})) {
+                goto malloc_fail;
+            }
+        } else if (strcmp(token, "(") == 0) {
+            // Handle left parenthesis
+            if (!expr_stack_push(&op_stack, (ExprToken){.type = TOKEN_LPAREN})) {
+                goto malloc_fail;
+            }
+        } else if (strcmp(token, ")") == 0) {
+            // Handle right parenthesis
+            while (op_stack.size > 0 && expr_stack_peek(&op_stack).type != TOKEN_LPAREN) {
+                if (!expr_stack_push(output, expr_stack_pop(&op_stack))) {
+                    goto malloc_fail;
+                }
+            }
+            if (op_stack.size == 0) {
+                set_error(err, TMPL_ERR_PARSE, "Mismatched parentheses",
+                          calculate_line_number(template_start, error_pos));
+                goto syntax_error;
+            }
+            expr_stack_pop(&op_stack);  // Pop the LPAREN
+        } else {
+            // Handle value (variable)
+            bool val = evaluate_condition(token, ctx, loop_stack, err, template_start, error_pos);
+            if (err->type != TMPL_ERR_NONE) {
+                goto syntax_error;
+            }
+            if (!expr_stack_push(output, (ExprToken){.type = TOKEN_VALUE, .value = val})) {
+                goto malloc_fail;
+            }
+        }
+        token = next_token(NULL, &saveptr, token_buf, sizeof(token_buf));
+    }
+
+    // Pop remaining operators
+    while (op_stack.size > 0) {
+        if (expr_stack_peek(&op_stack).type == TOKEN_LPAREN) {
+            set_error(err, TMPL_ERR_PARSE, "Mismatched parentheses",
+                      calculate_line_number(template_start, error_pos));
+            goto syntax_error;
+        }
+        if (!expr_stack_push(output, expr_stack_pop(&op_stack))) {
+            goto malloc_fail;
+        }
+    }
+
+    success = true;
+    goto cleanup;
+
+malloc_fail:
+    set_error(err, TMPL_ERR_MEMORY, "Memory allocation failed",
+              calculate_line_number(template_start, error_pos));
+
+syntax_error:
+    // Error already set by caller or above
+
+cleanup:
+    free(expr_copy);
+    expr_stack_free(&op_stack);
+    return success;
+}
+
+/**
+ * @brief Evaluate a postfix expression
+ */
+WARN_UNUSED static bool evaluate_postfix(ExprStack* stack) {
+    ExprStack eval_stack;
+    if (!expr_stack_init(&eval_stack, stack->size)) {
+        return false;
+    }
+
+    for (size_t i = 0; i < stack->size; i++) {
+        ExprToken token = stack->tokens[i];
+        switch (token.type) {
+            case TOKEN_VALUE:
+                if (!expr_stack_push(&eval_stack, token)) {
+                    expr_stack_free(&eval_stack);
+                    return false;
+                }
+                break;
+            case TOKEN_NOT: {
+                if (eval_stack.size < 1) {
+                    expr_stack_free(&eval_stack);
+                    return false;
+                }
+                bool val = expr_stack_pop(&eval_stack).value;
+                if (!expr_stack_push(&eval_stack, (ExprToken){.type = TOKEN_VALUE, .value = !val})) {
+                    expr_stack_free(&eval_stack);
+                    return false;
+                }
+                break;
+            }
+            case TOKEN_AND: {
+                if (eval_stack.size < 2) {
+                    expr_stack_free(&eval_stack);
+                    return false;
+                }
+                bool b = expr_stack_pop(&eval_stack).value;
+                bool a = expr_stack_pop(&eval_stack).value;
+                if (!expr_stack_push(&eval_stack, (ExprToken){.type = TOKEN_VALUE, .value = a && b})) {
+                    expr_stack_free(&eval_stack);
+                    return false;
+                }
+                break;
+            }
+            case TOKEN_OR: {
+                if (eval_stack.size < 2) {
+                    expr_stack_free(&eval_stack);
+                    return false;
+                }
+                bool b = expr_stack_pop(&eval_stack).value;
+                bool a = expr_stack_pop(&eval_stack).value;
+                if (!expr_stack_push(&eval_stack, (ExprToken){.type = TOKEN_VALUE, .value = a || b})) {
+                    expr_stack_free(&eval_stack);
+                    return false;
+                }
+                break;
+            }
+            default:
+                expr_stack_free(&eval_stack);
+                return false;
+        }
+    }
+
+    if (eval_stack.size != 1) {
+        expr_stack_free(&eval_stack);
+        return false;
+    }
+
+    bool result = expr_stack_pop(&eval_stack).value;
+    expr_stack_free(&eval_stack);
+    return result;
+}
+
+// ===================================================================
+
 /**
  * @brief Evaluate a condition expression
  * @param condition Condition string to evaluate
@@ -356,80 +684,97 @@ static inline bool is_truthy(const TemplateValue* val) {
 WARN_UNUSED static bool evaluate_condition(const char* condition, const TemplateContext* ctx,
                                            const LoopStack* loop_stack, TemplateError* err,
                                            const char* template_start, const char* error_pos) {
-    char condition_copy[128];
-    strncpy(condition_copy, condition, sizeof(condition_copy) - 1);
-    condition_copy[sizeof(condition_copy) - 1] = '\0';
 
-    // Trim whitespace
-    char* trimmed = condition_copy;
-    while (isspace((unsigned char)*trimmed))
-        trimmed++;
-    char* end = trimmed + strlen(trimmed) - 1;
-    while (end > trimmed && isspace((unsigned char)*end))
-        end--;
-    *(end + 1) = '\0';
+    // Simple case - no operators
+    if (strstr(condition, " and ") == NULL && strstr(condition, " or ") == NULL &&
+        strstr(condition, " not ") == NULL && strchr(condition, '(') == NULL) {
+        char condition_copy[128];
+        strncpy(condition_copy, condition, sizeof(condition_copy) - 1);
+        condition_copy[sizeof(condition_copy) - 1] = '\0';
 
-    // Check if it's a loop variable
-    LoopFrame* current_loop = (LoopFrame*)loop_stack_top((LoopStack*)loop_stack);
-    if (current_loop && strcmp(trimmed, current_loop->item_name) == 0) {
-        TemplateValue item = {.type = current_loop->array->value.array.item_type};
-        switch (item.type) {
-            case TMPL_STRING:
-                item.value.str = ((const char**)current_loop->array->value.array.items)[current_loop->index];
-                break;
-            case TMPL_INT:
-                item.value.integer = *(((int**)current_loop->array->value.array.items)[current_loop->index]);
-                break;
-            case TMPL_FLOAT:
-                item.value.floating =
-                    *(((float**)current_loop->array->value.array.items)[current_loop->index]);
-                break;
-            case TMPL_DOUBLE:
-                item.value.dbl = *(((double**)current_loop->array->value.array.items)[current_loop->index]);
-                break;
-            case TMPL_BOOL:
-                item.value.boolean = *(((bool**)current_loop->array->value.array.items)[current_loop->index]);
-                break;
-            case TMPL_LONG:
-                item.value.long_int =
-                    *(((long**)current_loop->array->value.array.items)[current_loop->index]);
-                break;
-            case TMPL_UINT:
-                item.value.uint =
-                    *(((unsigned int**)current_loop->array->value.array.items)[current_loop->index]);
-                break;
-            default:
-                return false;
+        // Trim whitespace
+        char* trimmed = condition_copy;
+        while (isspace((unsigned char)*trimmed))
+            trimmed++;
+        char* end = trimmed + strlen(trimmed) - 1;
+        while (end > trimmed && isspace((unsigned char)*end))
+            end--;
+        *(end + 1) = '\0';
+
+        // Check if it's a loop variable
+        LoopFrame* current_loop = (LoopFrame*)loop_stack_top((LoopStack*)loop_stack);
+        if (current_loop && strcmp(trimmed, current_loop->item_name) == 0) {
+            TemplateValue item = {.type = current_loop->array->value.array.item_type};
+            switch (item.type) {
+                case TMPL_STRING:
+                    item.value.str =
+                        ((const char**)current_loop->array->value.array.items)[current_loop->index];
+                    break;
+                case TMPL_INT:
+                    item.value.integer =
+                        *(((int**)current_loop->array->value.array.items)[current_loop->index]);
+                    break;
+                case TMPL_FLOAT:
+                    item.value.floating =
+                        *(((float**)current_loop->array->value.array.items)[current_loop->index]);
+                    break;
+                case TMPL_DOUBLE:
+                    item.value.dbl =
+                        *(((double**)current_loop->array->value.array.items)[current_loop->index]);
+                    break;
+                case TMPL_BOOL:
+                    item.value.boolean =
+                        *(((bool**)current_loop->array->value.array.items)[current_loop->index]);
+                    break;
+                case TMPL_LONG:
+                    item.value.long_int =
+                        *(((long**)current_loop->array->value.array.items)[current_loop->index]);
+                    break;
+                case TMPL_UINT:
+                    item.value.uint =
+                        *(((unsigned int**)current_loop->array->value.array.items)[current_loop->index]);
+                    break;
+                default:
+                    return false;
+            }
+            return is_truthy(&item);
         }
-        return is_truthy(&item);
+
+        // Check context variables
+        const TemplateValue* val = context_get(ctx, trimmed);
+        if (!val) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Missing template variable for '%s'", trimmed);
+            return set_error(err, TMPL_ERR_PARSE, msg, calculate_line_number(template_start, error_pos));
+        }
+
+        return is_truthy(val);
     }
 
-    // Check context variables
-    const TemplateValue* val = context_get(ctx, trimmed);
-    if (!val) {
-        char msg[128];
-        snprintf(msg, sizeof(msg), "Missing template variable for '%s'", trimmed);
-        return set_error(err, TMPL_ERR_PARSE, msg, calculate_line_number(template_start, error_pos));
+    ExprStack postfix;
+    if (!expr_stack_init(&postfix, 32)) {
+        return set_error(err, TMPL_ERR_MEMORY, "Failed to initialize expression stack",
+                         calculate_line_number(template_start, error_pos));
     }
 
-    return is_truthy(val);
+    if (!infix_to_postfix(condition, ctx, loop_stack, &postfix, err, template_start, error_pos)) {
+        expr_stack_free(&postfix);
+        return false;
+    }
+
+    bool result = evaluate_postfix(&postfix);
+    expr_stack_free(&postfix);
+    return result;
 }
-
-/* ==================== Main Template Rendering Function ==================== */
 
 /**
  * @brief Renders a template string with the given context
- * @param template Template string to render
+ * @param template Null-terminated template string to render.
  * @param ctx Context containing variables
  * @param out Output buffer to write result to
  * @param err Error struct to populate if rendering fails
  * @return true on success, false on failure (check err for details)
  *
- * This version includes logic to handle whitespace around block-level tags.
- * If a tag like {% if ... %} or {% endfor %} is on a line by itself (with only
- * whitespace characters around it), the entire line, including the leading
- * whitespace and the trailing newline, will be consumed, producing no output.
- * This results in cleaner, correctly indented HTML.
  */
 bool render_template(const char* template, const TemplateContext* ctx, OutputBuffer* out,
                      TemplateError* err) {
@@ -786,6 +1131,7 @@ bool render_template(const char* template, const TemplateContext* ctx, OutputBuf
         loop_stack_pop(&loop_stack);
     while (conditional_stack.depth > 0)
         conditional_stack_pop(&conditional_stack);
+
     free(loop_stack.frames);
     free(conditional_stack.frames);
     return true;

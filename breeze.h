@@ -158,6 +158,37 @@ bool render_template(const char* template, const TemplateContext* ctx, OutputBuf
     for (size_t __i = 0; __i < sizeof(arr) / sizeof((arr)[0]); ++__i)                                        \
     name[__i] = &(arr)[__i]
 
+/* ==================== Expression Evaluation Stack ==================== */
+
+/**
+ * @brief Enum for expression token types
+ */
+typedef enum {
+    TOKEN_VALUE,
+    TOKEN_AND,
+    TOKEN_OR,
+    TOKEN_NOT,
+    TOKEN_LPAREN,
+    TOKEN_RPAREN,
+} ExprTokenType;
+
+/**
+ * @brief Struct representing an expression token
+ */
+typedef struct {
+    ExprTokenType type;
+    bool value;  // Only used for TOKEN_VALUE
+} ExprToken;
+
+/**
+ * @brief Struct representing an expression evaluation stack
+ */
+typedef struct {
+    ExprToken* tokens;
+    size_t size;
+    size_t capacity;
+} ExprStack;
+
 #ifdef __cplusplus
 }
 #endif

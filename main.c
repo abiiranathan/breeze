@@ -27,6 +27,7 @@ int main() {
         return -2;
     }
     template[n] = '\0';
+    fclose(fp);
 
     // --- Render ---
     OutputBuffer out;

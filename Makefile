@@ -1,35 +1,35 @@
 # Detect operating system
 ifeq ($(OS),Windows_NT)
-    # Windows settings
-    LIB_EXT = .dll
-    LIB_PREFIX = 
-    STATIC_EXT = .lib
-    EXE_EXT = .exe
-    RM = del /Q
-    MKDIR = mkdir
-    INSTALL = copy
-    INSTALL_LIB_DIR = $(PREFIX)/lib
-    INSTALL_BIN_DIR = $(PREFIX)/bin
+	# Windows settings
+	LIB_EXT = .dll
+	LIB_PREFIX = 
+	STATIC_EXT = .lib
+	EXE_EXT = .exe
+	RM = del /Q
+	MKDIR = mkdir
+	INSTALL = copy
+	INSTALL_LIB_DIR = $(PREFIX)/lib
+	INSTALL_BIN_DIR = $(PREFIX)/bin
 else
-    # Unix-like settings
-    LIB_EXT = .so
-    LIB_PREFIX = lib
-    STATIC_EXT = .a
-    EXE_EXT =
-    RM = rm -f
-    MKDIR = mkdir -p
-    INSTALL = install
-    UNAME_S := $(shell uname -s)
-    ifeq ($(UNAME_S),Darwin)
-        LIB_EXT = .dylib
-    endif
-    INSTALL_LIB_DIR = $(PREFIX)/lib
-    INSTALL_BIN_DIR = $(PREFIX)/bin
+	# Unix-like settings
+	LIB_EXT = .so
+	LIB_PREFIX = lib
+	STATIC_EXT = .a
+	EXE_EXT =
+	RM = rm -f
+	MKDIR = mkdir -p
+	INSTALL = install
+	UNAME_S := $(shell uname -s)
+	ifeq ($(UNAME_S),Darwin)
+		LIB_EXT = .dylib
+	endif
+	INSTALL_LIB_DIR = $(PREFIX)/lib
+	INSTALL_BIN_DIR = $(PREFIX)/bin
 endif
 
 # Compiler and flags
 CC = clang
-CFLAGS = -Wall -Wextra -O2 -std=c99 -D_GNU_SOURCE
+CFLAGS = -Wall -Wextra -g -std=c99 -D_GNU_SOURCE
 LDFLAGS = -L. -lbreeze
 
 # Source files
@@ -40,12 +40,13 @@ LIB_NAME = $(LIB_PREFIX)breeze
 EXE_SRC = main.c
 EXE_OBJ = $(EXE_SRC:.c=.o)
 EXE_NAME = breeze$(EXE_EXT)
+TEST_EXE = breeze_test
 
 # Installation paths
 PREFIX ?= /usr/local
 INSTALL_INCLUDE_DIR = $(PREFIX)/include/breeze
 
-.PHONY: all static shared clean install install-static install-shared uninstall
+.PHONY: all static shared clean install install-static install-shared uninstall test
 
 all: static $(EXE_NAME)
 
@@ -75,6 +76,10 @@ $(EXE_NAME): $(EXE_OBJ) $(LIB_NAME)$(STATIC_EXT)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+test: breeze_test.c
+	$(CC) $(CFLAGS) breeze_test.c -o $(TEST_EXE) $(LDFLAGS)
+	./$(TEST_EXE)
 
 # Installation
 install: install-static
@@ -112,4 +117,4 @@ else
 endif
 
 clean:
-	$(RM) $(LIB_OBJ) $(EXE_OBJ) $(LIB_NAME).* $(EXE_NAME)
+	$(RM) $(LIB_OBJ) $(EXE_OBJ) $(LIB_NAME).* $(EXE_NAME) $(TEST_EXE)

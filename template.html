@@ -60,6 +60,10 @@
         <li>{{ num }}</li>
         {% endfor %}
     </ul>
+
+    {% if (is_admin or user) %}
+    <p>{{ user }}, you are Superuser!</p>
+    {% endif %}
 </body>
 
 </html>
