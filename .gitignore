@@ -5,3 +5,4 @@ breeze
 *.a
 *.dylib
 *.dll
+_test
