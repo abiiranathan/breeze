@@ -5,15 +5,15 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-// On Windows, use _strdup and strtok_s
 #if defined(_MSC_VER)
-#define strdup _strdup
-#define strtok_r strtok_s
-#define WARN_UNUSED _Check_return_
+#define strdup        _strdup
+#define strtok_r      strtok_s
+#define WARN_UNUSED   _Check_return_
 #define ALWAYS_INLINE __forceinline
 #else
-#define WARN_UNUSED __attribute__((warn_unused_result))
+#define WARN_UNUSED   __attribute__((warn_unused_result))
 #define ALWAYS_INLINE __attribute__((always_inline))
 #endif
 
@@ -21,23 +21,10 @@
 extern "C" {
 #endif
 
-/**
- * @brief Enum representing different value types that can be used in templates
- */
-typedef enum {
-    TMPL_STRING,
-    TMPL_INT,
-    TMPL_FLOAT,
-    TMPL_DOUBLE,
-    TMPL_BOOL,
-    TMPL_LONG,
-    TMPL_UINT,
-    TMPL_ARRAY
-} ValueType;
+/* ==================== Value Types ==================== */
 
-/**
- * @brief Union representing a template value that can be of different types
- */
+typedef enum { TMPL_STRING, TMPL_INT, TMPL_FLOAT, TMPL_DOUBLE, TMPL_BOOL, TMPL_LONG, TMPL_UINT, TMPL_ARRAY } ValueType;
+
 typedef union {
     const char* str;
     int integer;
@@ -53,82 +40,71 @@ typedef union {
     } array;
 } TemplateValueUnion;
 
-/**
- * @brief Enum representing different error types
- */
 typedef enum {
-    TMPL_ERR_NONE,    // No error.
-    TMPL_ERR_PARSE,   // Malformed tags, e.g., {{ var
-    TMPL_ERR_SYNTAX,  // Incorrect directive syntax, e.g., {% for x from y %}
-    TMPL_ERR_RENDER,  // Variable not found, wrong type, etc.
-    TMPL_ERR_MEMORY   // malloc/realloc failure
+    TMPL_ERR_NONE,
+    TMPL_ERR_PARSE,
+    TMPL_ERR_SYNTAX,
+    TMPL_ERR_RENDER,
+    TMPL_ERR_MEMORY,
+    TMPL_ERR_IO
 } TemplateErrorType;
 
-/**
- * @brief Struct representing a typed template value
- */
 typedef struct {
     ValueType type;
     TemplateValueUnion value;
 } TemplateValue;
 
-/**
- * @brief Struct representing a template variable (key-value pair)
- */
 typedef struct {
     const char* key;
     TemplateValue value;
 } TemplateVar;
 
-/**
- * @brief Struct representing the template rendering context
- */
 typedef struct {
     TemplateVar* vars;
     size_t count;
+    size_t capacity;
 } TemplateContext;
 
-/**
- * @brief Struct representing a template error
- */
 typedef struct {
     TemplateErrorType type;
     char message[256];
     size_t line;
 } TemplateError;
 
-/**
- * @brief Struct representing a dynamically growing output buffer
- */
 typedef struct {
-    char* data;       // Dynamically allocated buffer data.
-    size_t size;      // Buffer size.
-    size_t capacity;  // Allocated capacity.
+    char* data;
+    size_t size;
+    size_t capacity;
 } OutputBuffer;
 
-/**
- * @brief Initialize an output buffer
- * @param buf Pointer to the buffer to initialize
- * @param initial_capacity Initial capacity of the buffer
- * @return true on success, false on memory allocation failure
- */
+/* ==================== Filter System ==================== */
+
+typedef bool (*BreezeFilterFn)(const TemplateValue* val, const char* arg, OutputBuffer* out);
+
+typedef struct {
+    char name[64];
+    BreezeFilterFn fn;
+} BreezeFilter;
+
+bool breeze_register_filter(const char* name, BreezeFilterFn fn);
+void breeze_clear_filters(void);
+
+/* ==================== Dynamic Context ==================== */
+
+TemplateContext* context_new(size_t initial_capacity);
+WARN_UNUSED bool context_set(TemplateContext* ctx, const char* key, TemplateValue value);
+void context_free(TemplateContext* ctx);
+
+/* ==================== Output Buffer ==================== */
+
 WARN_UNUSED bool buffer_init(OutputBuffer* buf, size_t initial_capacity);
 
-/**
- * @brief Renders a template string with the given context
- * @param template Template string to render
- * @param ctx Context containing variables
- * @param out Output buffer to write result to
- * @param err Error struct to populate if rendering fails
- * @return true on success, false on failure (check err for details)
- *
- * This version includes logic to handle whitespace around block-level tags.
- * If a tag like {% if ... %} or {% endfor %} is on a line by itself (with only
- * whitespace characters around it), the entire line, including the leading
- * whitespace and the trailing newline, will be consumed, producing no output.
- * This results in cleaner, correctly indented HTML.
- */
+/* ==================== Render API ==================== */
+
 bool render_template(const char* template, const TemplateContext* ctx, OutputBuffer* out, TemplateError* err);
+bool render_template_file(const char* path, const TemplateContext* ctx, OutputBuffer* out, TemplateError* err);
+
+/* ==================== Convenience Macros ==================== */
 
 // clang-format off
 #define VAR_STRING(k, v)   {k, {TMPL_STRING, .value = {.str = v}}}
@@ -140,29 +116,25 @@ bool render_template(const char* template, const TemplateContext* ctx, OutputBuf
 #define VAR_UINT(k, v)     {k, {TMPL_UINT,   .value = {.uint = v}}}
 // clang-format on
 
-#define VAR_ARRAY(key, ptr_array, item_type_enum)                                                            \
-    {                                                                                                        \
-        key, {                                                                                               \
-            TMPL_ARRAY, .value.array = {                                                                     \
-                .items = (ptr_array),                                                                        \
-                .count = sizeof(ptr_array) / sizeof((ptr_array)[0]),                                         \
-                .item_type = (item_type_enum)                                                                \
-            }                                                                                                \
-        }                                                                                                    \
+#define VAR_ARRAY(key, ptr_array, item_type_enum)                    \
+    {                                                                \
+        key, {                                                       \
+            TMPL_ARRAY, .value.array = {                             \
+                .items = (ptr_array),                                \
+                .count = sizeof(ptr_array) / sizeof((ptr_array)[0]), \
+                .item_type = (item_type_enum)                        \
+            }                                                        \
+        }                                                            \
     }
 
 #define VAR_ARRAY_STR(key, str_array) VAR_ARRAY(key, str_array, TMPL_STRING)
 
-#define MAKE_PTR_ARRAY(arr, ptrs, name)                                                                      \
-    ptrs name[sizeof(arr) / sizeof((arr)[0])];                                                               \
-    for (size_t __i = 0; __i < sizeof(arr) / sizeof((arr)[0]); ++__i)                                        \
-    name[__i] = &(arr)[__i]
+#define MAKE_PTR_ARRAY(arr, ptrs, name)        \
+    ptrs name[sizeof(arr) / sizeof((arr)[0])]; \
+    for (size_t __i = 0; __i < sizeof(arr) / sizeof((arr)[0]); ++__i) name[__i] = &(arr)[__i]
 
-/* ==================== Expression Evaluation Stack ==================== */
+/* ==================== Expression Stack (exposed for tests) ==================== */
 
-/**
- * @brief Enum for expression token types
- */
 typedef enum {
     TOKEN_VALUE,
     TOKEN_AND,
@@ -172,17 +144,11 @@ typedef enum {
     TOKEN_RPAREN,
 } ExprTokenType;
 
-/**
- * @brief Struct representing an expression token
- */
 typedef struct {
     ExprTokenType type;
-    bool value;  // Only used for TOKEN_VALUE
+    bool value;
 } ExprToken;
 
-/**
- * @brief Struct representing an expression evaluation stack
- */
 typedef struct {
     ExprToken* tokens;
     size_t size;
